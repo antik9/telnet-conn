@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -20,6 +21,8 @@ var (
 	port    = kingpin.Flag("port", "Port").Required().String()
 	timeout = kingpin.Flag("timeout", "Timeout on connection").Default(
 		strconv.FormatInt(60, 10)).Int()
+	requestTimeout = kingpin.Flag("request_timeout", "Timeout for each request").Default(
+		strconv.FormatInt(1, 10)).Int()
 )
 
 func applyCommand(conn net.Conn, command string) {
@@ -28,7 +31,8 @@ func applyCommand(conn net.Conn, command string) {
 		log.Fatalln(err)
 	}
 
-	err = conn.SetReadDeadline(time.Now().Add(time.Second))
+	err = conn.SetReadDeadline(
+		time.Now().Add(time.Duration(*requestTimeout) * time.Second))
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -41,16 +45,6 @@ func applyCommand(conn net.Conn, command string) {
 		}
 		fmt.Println(string(b[:n]))
 	}
-}
-
-func makeTimeoutChannel() <-chan bool {
-	ch := make(chan bool, 1)
-	go func() {
-		defer close(ch)
-		time.Sleep(time.Second * time.Duration(*timeout))
-		ch <- true
-	}()
-	return ch
 }
 
 func makeReadChannel() <-chan string {
@@ -72,14 +66,17 @@ func runUntilComplete() {
 	}
 	defer conn.Close()
 
-	end := makeTimeoutChannel()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), time.Duration(*timeout)*time.Second)
+	defer cancel()
+
 	cmd := makeReadChannel()
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGQUIT)
 
 	for {
 		select {
-		case <-end:
+		case <-ctx.Done():
 			return
 		case <-sigs:
 			return
